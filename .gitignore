@@ -1,0 +1,6 @@
+node_modules/
+books/
+covers/
+book-assets/
+book-meta.json
+.DS_Store

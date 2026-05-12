@@ -1,0 +1,20 @@
+{
+  "name": "ebook-reader",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@lingo-reader/mobi-parser": "^0.4.6",
+    "epub2": "^3.0.2",
+    "jszip": "^3.10.1",
+    "pdf-parse": "^2.4.5"
+  }
+}
