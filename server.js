@@ -299,9 +299,54 @@ async function parseEpubBook(filePath) {
       fs.writeFileSync(assetOutPath, await assetFile.async('nodebuffer'));
     }
 
-    // 6. Extract chapters in spine order
+    // 6. Parse NCX/NAV TOC for chapter titles
+    const tocByHref = new Map();
+
+    // NCX TOC
+    const ncxItem = opfXml.match(/href="([^"]+)"[^>]*media-type="application\/x-dtbncx\+xml"/)
+      || opfXml.match(/<item[^>]*media-type="application\/x-dtbncx\+xml"[^>]*href="([^"]+)"/);
+    if (ncxItem) {
+      const ncxPath = opfDir + ncxItem[1];
+      const ncxFile = zip.file(ncxPath);
+      if (ncxFile) {
+        const ncxXml = await ncxFile.async('text');
+        const navPoints = [...ncxXml.matchAll(/<navPoint[^>]*>[\s\S]*?<content[^>]*src="([^"#]+)(?:#[^"]*)?"[^>]*\/?>[\s\S]*?<text>([^<]+)<\/text>/g)];
+        for (const np of navPoints) {
+          const href = decodeURIComponent(np[1].trim());
+          const label = np[2].trim();
+          if (href && label) tocByHref.set(href, label);
+        }
+        // Also try alternate NCX format where <text> comes before <content>
+        const navPoints2 = [...ncxXml.matchAll(/<navPoint[^>]*>[\s\S]*?<text>([^<]+)<\/text>[\s\S]*?<content[^>]*src="([^"#]+)(?:#[^"]*)?"/g)];
+        for (const np of navPoints2) {
+          const label = np[1].trim();
+          const href = decodeURIComponent(np[2].trim());
+          if (href && label && !tocByHref.has(href)) tocByHref.set(href, label);
+        }
+      }
+    }
+
+    // NAV XHTML TOC (EPUB 3)
+    const navItem = opfXml.match(/href="([^"]+)"[^>]*properties="[^"]*nav[^"]*"/)
+      || opfXml.match(/<item[^>]*properties="[^"]*nav[^"]*"[^>]*href="([^"]+)"/);
+    if (navItem) {
+      const navPath = opfDir + navItem[1];
+      const navFile = zip.file(navPath);
+      if (navFile) {
+        const navHtml = await navFile.async('text');
+        const navLinks = [...navHtml.matchAll(/<a[^>]*href="([^"#]+)(?:#[^"]*)?"[^>]*>([\s\S]*?)<\/a>/g)];
+        for (const nl of navLinks) {
+          const href = decodeURIComponent(nl[1].trim());
+          const label = nl[2].replace(/<[^>]+>/g, '').trim();
+          if (href && label && !tocByHref.has(href)) tocByHref.set(href, label);
+        }
+      }
+    }
+
+    // 7. Extract chapters in spine order
     const chapters = [];
-    const htmlItems = spineIdRefs.filter(id => manifest[id] && manifest[id].mediaType === 'application/xhtml+xml');
+    const htmlMediaTypes = ['application/xhtml+xml', 'text/html'];
+    const htmlItems = spineIdRefs.filter(id => manifest[id] && htmlMediaTypes.includes(manifest[id].mediaType));
 
     for (const id of htmlItems) {
       const item = manifest[id];
@@ -321,17 +366,26 @@ async function parseEpubBook(filePath) {
       const textOnlyForCheck = bodyContent.replace(/<svg[\s\S]*?<\/svg>/gi, '').replace(/<img[^>]+>/gi, '').replace(/<[^>]+>/g, '').trim();
       if (textOnlyForCheck.length < 5) continue;
 
-      // Extract title: prefer <h1>/<h2>, fall back to <title>, then id
+      // Extract title: prefer TOC, then h1/h2, then <title>, then id
       let chTitle = '';
-      // Try h1 first
-      const h1M = bodyContent.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-      if (h1M) chTitle = h1M[1].replace(/<[^>]+>/g, '').trim();
+
+      // Try TOC lookup first
+      const tocKey = item.href;
+      const tocKeyDecoded = decodeURIComponent(item.href);
+      if (tocByHref.has(tocKey)) chTitle = tocByHref.get(tocKey);
+      else if (tocByHref.has(tocKeyDecoded)) chTitle = tocByHref.get(tocKeyDecoded);
+
+      // Try h1
+      if (!chTitle) {
+        const h1M = bodyContent.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+        if (h1M) chTitle = h1M[1].replace(/<[^>]+>/g, '').trim();
+      }
       // Try h2
       if (!chTitle) {
         const h2M = bodyContent.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
         if (h2M) chTitle = h2M[1].replace(/<[^>]+>/g, '').trim();
       }
-      // Fall back to <title> tag (skip generic values like "未知", "Cover", "Contents")
+      // Fall back to <title> tag (skip generic values)
       if (!chTitle) {
         const titleM = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
         if (titleM && titleM[1].trim() && !['未知','Cover','Contents','目录'].includes(titleM[1].trim())) {
